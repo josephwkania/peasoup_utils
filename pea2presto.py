@@ -21,6 +21,9 @@ class peasoup2presto(object):
                 print(f"File \'{options['mask']}\' does not exist, exiting")
                 sys.exit() 
 
+    def caller(prst):
+       subprocess.run(prst, shell=True, stdout=subprocess.PIPE)
+       #print(out.stdout)
 
     def peasoup2presto(self):
         start = time.time #time the run
@@ -31,6 +34,7 @@ class peasoup2presto(object):
         root = tree.getroot()
         numCands = len(root.find('candidates'))
         candidateTable = np.empty([numCands,3], dtype=float)
+        commands = []
         for i, candidate in enumerate(root.find('candidates')):
             periodOpt = float(candidate.find('opt_period').text)#use the optimal period if avaliable
             if periodOpt > 0.0:
@@ -42,18 +46,20 @@ class peasoup2presto(object):
             folded_snr = float(candidate.find('folded_snr').text)
             candidateTable[i][2] = max(snr, folded_snr)
         
+        
+        num_cands  = min(numCands, self.options['number'])
+        for i in range(num_cands):
+            if candidateTable[i][2]<=self.options['snr']:
+                break
+            print(f"prepfolding cand: #{i:02}, with period={candidateTable[i][0]:.7f}, dm={candidateTable[i][1]:.3f}, snr={candidateTable[i][2]:.3f}")
+            prst = f"prepfold -p {candidateTable[i][0]} -dm {candidateTable[i][1]} {self.options['fil']} -o {self.options['results']} -noxwin"
+            if self.options['mask']:
+                prst += f" -mask {self.options['mask']}"
+            commands.append(prst)
+
         with Pool(processes=self.options['nproc']) as p:
-            num_cands  = min(numCands, self.options['number'])
             with tqdm(total=num_cands, disable=self.options['no_progress']) as pbar:
-                for i in tqdm(range(num_cands)):
-                    if candidateTable[i][2]<=self.options['snr']:
-                         break
-                    print(f"sending canidate #{i:02}, with period={candidateTable[i][0]:.7f}, dm={candidateTable[i][1]:.3f}, snr={candidateTable[i][2]:.3f} to presto")
-                    prst = f"prepfold -p {candidateTable[i][0]} -dm {candidateTable[i][1]} {self.options['fil']} -o {self.options['results']} -noxwin"
-                    if self.options['mask']:
-                        prst += f" -mask {self.options['mask']}"
-                    out = subprocess.run(prst, shell=True, stdout=subprocess.PIPE)
-                    print(out.stdout)
+                for i , _ in  tqdm(enumerate(p.imap_unordered(peasoup2presto.caller, commands, chunksize=1))):
                     pbar.update()
 
 if __name__ == "__main__":
