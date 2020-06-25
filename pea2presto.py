@@ -2,6 +2,8 @@
 import os, argparse, time, sys, subprocess
 import  xml.etree.ElementTree as ET
 import numpy as np
+from tqdm import tqdm 
+from multiprocessing import Pool
 
 class peasoup2presto(object):
     def __init__(self, **options):
@@ -12,7 +14,7 @@ class peasoup2presto(object):
             print(f"File \'{options['xml']}\' does not exist, exiting")
             sys.exit()
         if not os.path.exists(options['results']):#see if file is there
-            print(f"Directory \'{options['psrfile']}\' does not exist, will try to create.")
+            print(f"Directory \'{options['results']}\' does not exist, will try to create.")
             os.makedirs(options['results'])
         if options['mask']:
             if not os.path.exists(options['mask']):#see if file is there
@@ -40,17 +42,19 @@ class peasoup2presto(object):
             folded_snr = float(candidate.find('folded_snr').text)
             candidateTable[i][2] = max(snr, folded_snr)
         
-        for i in range(min(numCands, self.options['number'])):
-            if candidateTable[i][2]<=self.options['snr']:
-                break
-            print(f"sending canidate #{i:02}, with period={candidateTable[i][0]:.7f}, dm={candidateTable[i][1]:.3f}, snr={candidateTable[i][2]:.3f} to presto")
-            if self.options['mask']:
-                prst = f"/opt/pulsar/src/PRESTOv2.7/bin/prepfold -p {candidateTable[i][0]} -dm {candidateTable[i][1]} {self.options['psrfile']} -o {self.options['results']} -noxwin -mask {self.options['mask']}"
-            else:
-                prst = f"/opt/pulsar/src/PRESTOv2.7/bin/prepfold -p {candidateTable[i][0]} -dm {candidateTable[i][1]} {self.options['psrfile']} -o {self.options['results']} -noxwin"
-            out = subprocess.run(['sbatch', '--job-name', 'pea2prst', '--wrap', prst], stdout=subprocess.PIPE)
-            print(out.stdout)
-        
+        with Pool(processes=self.options['nproc']) as p:
+            num_cands  = min(numCands, self.options['number'])
+            with tqdm(total=num_cands, disable=self.options['no_progress']) as pbar:
+                for i in tqdm(range(num_cands)):
+                    if candidateTable[i][2]<=self.options['snr']:
+                         break
+                    print(f"sending canidate #{i:02}, with period={candidateTable[i][0]:.7f}, dm={candidateTable[i][1]:.3f}, snr={candidateTable[i][2]:.3f} to presto")
+                    prst = f"prepfold -p {candidateTable[i][0]} -dm {candidateTable[i][1]} {self.options['fil']} -o {self.options['results']} -noxwin"
+                    if self.options['mask']:
+                        prst += f" -mask {self.options['mask']}"
+                    out = subprocess.run(prst, shell=True, stdout=subprocess.PIPE)
+                    print(out.stdout)
+                    pbar.update()
 
 if __name__ == "__main__":
     parser=argparse.ArgumentParser(
@@ -63,7 +67,7 @@ if __name__ == "__main__":
     required.add_argument('-x','--xml',type=str,
                           help="peasoup .xml file to analyze",
                           required=True)
-    required.add_argument('-p','--psrfile',type=str,
+    required.add_argument('-f','--fil',type=str,
                           help="filterbank to fold",
                           required=True)
 
@@ -80,12 +84,17 @@ if __name__ == "__main__":
     semi_opt.add_argument('-s','--snr',type=int,
                           help='min snr of canidates to send to presto.',
                           default=6)
-
+    semi_opt.add_argument('-p','--nproc',type=int,
+                          help='Number of processors to use. (default: 6)',
+                          default=6)
+    
     optional=parser.add_argument_group('other optional arguments')
     optional.add_argument('-m', '--mask', type=str,
                           help='rfifind mask to use to make prepfolds')
+    optional.add_argument('--no_progress', default=None, action='store_true',
+                          help='Do not show progress bar')
 
-    
+
 
     args = vars(parser.parse_args())
     peasoup2presto(**args).peasoup2presto()
